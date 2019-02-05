@@ -8,8 +8,8 @@ import requests
 import time
 import urllib
 
-DEXCOM_ACCOUNT_NAME = "dclovesdc"
-DEXCOM_PASSWORD = "wowrls21"
+DEXCOM_ACCOUNT_NAME = "xxxx"
+DEXCOM_PASSWORD = "yyyy"
 AUTH_RETRY_DELAY_BASE = 2
 FAIL_RETRY_DELAY_BASE = 2
 MAX_AUTHFAILS = 1
@@ -163,12 +163,12 @@ def get_sessionID(opts):
         res = authorize(opts)
         if res.status_code == 200:
             opts.sessionID = res.text.strip('"')
-            print("Got auth token {}".format(opts.sessionID))
+            print("Got auth token {}", opts.sessionID)
         else:
             if authfails > MAX_AUTHFAILS:
                 raise AuthError(res.status_code, res)
             else:
-                print("Auth failed with: {}".format(res.status_code))
+                print("Auth failed with: {}", res.status_code)
                 time.sleep(AUTH_RETRY_DELAY_BASE**authfails)
                 authfails += 1
     return opts.sessionID
