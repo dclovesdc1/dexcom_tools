@@ -8,8 +8,6 @@ import requests
 import time
 import urllib
 
-DEXCOM_ACCOUNT_NAME = "xxx"
-DEXCOM_PASSWORD = "yyy"
 AUTH_RETRY_DELAY_BASE = 2
 FETCH_RETRY_DELAY_BASE = 2
 MAX_AUTHFAILS = 3
@@ -135,6 +133,12 @@ def get_sessionID(opts):
 
 
 def monitor_dexcom():
+    opts = Defaults
+    opts.accountName = DEXCOM_ACCOUNT_NAME
+    opts.password = DEXCOM_PASSWORD
+
+    get_sessionID(opts)
+
     fetchfails = 0
     while True:
         try:
@@ -153,11 +157,6 @@ def monitor_dexcom():
             opts.sessionID = None
             return -2
 
-opts = Defaults
-opts.accountName = os.getenv("DEXCOM_ACCOUNT_NAME", DEXCOM_ACCOUNT_NAME)
-opts.password = os.getenv("DEXCOM_PASSWORD", DEXCOM_PASSWORD)
-
-get_sessionID(opts)
 
 reading = monitor_dexcom()
 print(reading)
