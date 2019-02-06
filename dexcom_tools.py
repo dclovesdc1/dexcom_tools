@@ -8,13 +8,12 @@ import requests
 import time
 import urllib
 
-DEXCOM_ACCOUNT_NAME = "xxxx"
-DEXCOM_PASSWORD = "yyyy"
+DEXCOM_ACCOUNT_NAME = "xxx"
+DEXCOM_PASSWORD = "yyy"
 AUTH_RETRY_DELAY_BASE = 2
-FAIL_RETRY_DELAY_BASE = 2
-MAX_AUTHFAILS = 1
-MAX_FETCHFAILS = 10
-LAST_READING_MAX_LAG = 60 * 15
+FETCH_RETRY_DELAY_BASE = 2
+MAX_AUTHFAILS = 3
+MAX_FETCHFAILS = 3
 
 class Defaults:
     applicationId = "d89443d2-327c-4a6f-89e5-496bbb0317db"
@@ -32,16 +31,16 @@ class Defaults:
 
 # Mapping friendly names to trend IDs from dexcom
 DIRECTIONS = {
-    "nodir": 0,
-    "DoubleUp": 1,
-    "SingleUp": 2,
-    "FortyFiveUp": 3,
-    "Flat": 4,
-    "FortyFiveDown": 5,
-    "SingleDown": 6,
-    "DoubleDown": 7,
-    "NOT COMPUTABLE": 8,
-    "RATE OUT OF RANGE": 9,
+    "NO_DIR": 0,
+    "DOUBLE_UP": 1,
+    "SINGLE_UP": 2,
+    "45_UP": 3,
+    "FLAT": 4,
+    "45_DOWN": 5,
+    "SINGLE_DOWN": 6,
+    "DOUBLE_DOWN": 7,
+    "NOT_COMPUTABLE": 8,
+    "RATE_OUT_OF_RANGE": 9,
 }
 keys = DIRECTIONS.keys()
 
@@ -100,135 +99,70 @@ def fetch(opts):
     return requests.post(url, json=body, headers=headers)
 
 
-class Error(Exception):
-    """Base class for exceptions in this module."""
-    pass
-
-
-class AuthError(Error):
-    """Exception raised for errors when trying to Auth to Dexcome share
-    """
-
-    def __init__(self, status_code, message):
-        self.expression = status_code
-        self.message = message
-        print(message.__dict__)
-
-
-class FetchError(Error):
-    """Exception raised for errors in the date fetch.
-    """
-
-    def __init__(self, status_code, message):
-        self.expression = status_code
-        self.message = message
-        print(message.__dict__)
-
-
 def parse_dexcom_response(ops, res):
-    epochtime = int((
-                datetime.datetime.utcnow() -
-                datetime.datetime(1970, 1, 1)).total_seconds())
     try:
         last_reading_time = int(
             re.search('\d+', res.json()[0]['ST']).group())/1000
-        reading_lag = epochtime - last_reading_time
         trend = res.json()[0]['Trend']
         mgdl = res.json()[0]['Value']
         trend_english = DIRECTIONS.keys()[DIRECTIONS.values().index(trend)]
-        print(
-                "Last bg: {}  trending: {}  last reading at: {} seconds ago".format(mgdl, trend_english, reading_lag))
-        if reading_lag > LAST_READING_MAX_LAG:
-            print(
-                "***WARN It has been {} minutes since DEXCOM got a" +
-                "new measurement".format(int(reading_lag/60)))
         return {
                 "bg": mgdl,
                 "trend": trend,
                 "trend_english": trend_english,
-                "reading_lag": reading_lag,
                 "last_reading_time": last_reading_time
                 }
     except IndexError:
-        print(
-                "Caught IndexError: return code:{} ... response output" +
-                " below".format(res.status_code))
-        print(res.__dict__)
         return None
 
 
 def get_sessionID(opts):
     authfails = 0
-    while not opts.sessionID:
-        res = authorize(opts)
-        if res.status_code == 200:
-            opts.sessionID = res.text.strip('"')
-            print("Got auth token {}", opts.sessionID)
-        else:
-            if authfails > MAX_AUTHFAILS:
-                raise AuthError(res.status_code, res)
+    while True:
+        try:
+            res = authorize(opts)
+            if res and res.status_code == 200:
+                opts.sessionID = res.text.strip('"')
+                return 0
             else:
-                print("Auth failed with: {}", res.status_code)
-                time.sleep(AUTH_RETRY_DELAY_BASE**authfails)
-                authfails += 1
-    return opts.sessionID
+                if authfails > MAX_AUTHFAILS:
+                    return -1
+                else:
+                    time.sleep(AUTH_RETRY_DELAY_BASE**authfails)
+                    authfails += 1
+        except:
+            return -2
 
 
 def monitor_dexcom():
-    """ Main loop """
-
-    opts = Defaults
-    opts.accountName = os.getenv("DEXCOM_ACCOUNT_NAME", DEXCOM_ACCOUNT_NAME)
-    opts.password = os.getenv("DEXCOM_PASSWORD", DEXCOM_PASSWORD)
-
-    runs = 0
     fetchfails = 0
-    failures = 0
-    runs += 1
-    if not opts.sessionID:
-        authfails = 0
-        opts.sessionID = get_sessionID(opts)
-    try:
-        res = fetch(opts)
-        if res and res.status_code < 400:
-            fetchfails = 0
-            reading = parse_dexcom_response(opts, res)
-            if reading:
+    while True:
+        try:
+            res = fetch(opts)
+            if res and res.status_code < 400:
+                reading = parse_dexcom_response(opts, res)
                 return reading
             else:
-                opts.sessionID = None
-                log.error(
-                    "parse_dexcom_response returned None." +
-                    "investigate above logs")
-                if run_once:
-                    return None
-        else:
-            failures += 1
-            if run_once or fetchfails > MAX_FETCHFAILS:
-                opts.sessionID = None
-                print("Saw an error from the dexcom api, code: {}.  details to follow".format(res.status_code))
-                raise FetchError(res.status_code, res)
-            else:
-                print("Fetch failed on: {}".format(res.status_code))
-                if fetchfails > (MAX_FETCHFAILS/2):
-                    print("Trying to re-auth...")
+                if fetchfails > MAX_FETCHFAILS:
                     opts.sessionID = None
+                    return -1
                 else:
-                    print("Trying again...")
-                time.sleep(
-                    (FAIL_RETRY_DELAY_BASE**authfails))
-                    #opts.interval)
-                fetchfails += 1
-    except ConnectionError:
-        opts.sessionID = None
-        if run_once:
-            raise
-        print(
-            "Cnnection Error.. sleeping for {} seconds and".format(RETRY_DELAY) +
-            " trying again")
-        time.sleep(RETRY_DELAY)
+                    time.sleep(FETCH_RETRY_DELAY_BASE**fetchfails)
+                    fetchfails += 1
+        except:
+            opts.sessionID = None
+            return -2
 
+opts = Defaults
+opts.accountName = os.getenv("DEXCOM_ACCOUNT_NAME", DEXCOM_ACCOUNT_NAME)
+opts.password = os.getenv("DEXCOM_PASSWORD", DEXCOM_PASSWORD)
 
-if __name__ == '__main__':
-    reading = monitor_dexcom()
-    print(reading)
+get_sessionID(opts)
+
+reading = monitor_dexcom()
+print(reading)
+print(time.localtime(reading["last_reading_time"]))
+time.sleep(30)
+reading = monitor_dexcom()
+print(reading)
+print(time.localtime(reading["last_reading_time"]))
